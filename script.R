@@ -2,14 +2,17 @@ library(data.table)
 library(ggplot2)
 library(dplyr)
 library(caret)
+library(xgboost)
 train = fread('train.csv',data.table = F)
 test = fread('test-comb.csv',data.table = F)
 test = test %>% select(-V1,-Comb)
-
-
-
-
-
+subm1 =  test %>% select(User_ID,Product_ID)
+#Occupation
+train$Occupation = as.numeric(as.factor(train$Occupation))
+test$Occupation = as.numeric(as.factor(test$Occupation))
+#Marital Status
+train$Marital_Status = as.numeric(as.factor(train$Marital_Status))
+test$Marital_Status = as.numeric(as.factor(test$Marital_Status))
 # Gender
 train$Gender = as.numeric(as.factor(train$Gender))
 test$Gender = as.numeric(as.factor(test$Gender))
@@ -26,7 +29,6 @@ test$City_Category = as.numeric(as.factor(test$City_Category))
 
 
 #pr_id and usr_id
-subm1 =  test %>% select(User_ID,Product_ID)
 Purchase = train$Purchase
 train = train %>% select(-Purchase)
 all = rbind(train,test)
@@ -35,9 +37,50 @@ all$Product_ID = as.numeric(as.factor(all$Product_ID))
 
 train = all[1:nrow(train),]
 train = cbind(Purchase,train)
-
 test = all[(nrow(train)+1):nrow(all),]
+rm(Purchase,all)
 
+
+
+
+# mean purchase for each person
+person_mean = train %>% group_by(User_ID) %>% summarise(p_pmean=round(mean(Purchase)))
+train = left_join(train,person_mean, by=c('User_ID'='User_ID'))
+test = left_join(test,person_mean, by=c('User_ID'='User_ID'))
+rm(person_mean)
+# mean purchase for each product
+pro_pmean = train %>% group_by(Product_ID) %>% summarise(pro_pmean=round(mean(Purchase)))
+train = left_join(train,pro_pmean, by=c('Product_ID'='Product_ID'))
+test = left_join(test,pro_pmean, by=c('Product_ID'='Product_ID'))
+test[is.na(test$pro_pmean),]$pro_pmean = 0
+rm(pro_pmean)
+
+# mean purchase for each Age
+age_pmean = train %>% group_by(Age) %>% summarise(age_pmean=round(mean(Purchase)))
+train = left_join(train,age_pmean,by=c('Age'='Age'))
+test = left_join(test,age_pmean,by=c('Age'='Age'))
+rm(age_pmean)
+# mean purchase for each Occupation
+occu_pmean = train %>% group_by(Occupation) %>% summarise(occu_pmean=round(mean(Purchase)))
+train = left_join(train,occu_pmean,by=c('Occupation'='Occupation'))
+test = left_join(test,occu_pmean,by=c('Occupation'='Occupation'))
+rm(occu_pmean)
+#
+#mean purchase for each Gender
+gender_pmean = train %>% group_by(Gender) %>% summarise(gender_pmean=round(mean(Purchase)))
+train = left_join(train,gender_pmean,by=c('Gender'='Gender'))
+test = left_join(test,gender_pmean,by=c('Gender'='Gender'))
+rm(gender_pmean)
+#mean purchase for each city
+city_pmean = train %>% group_by(City_Category) %>% summarise(city_pmean=round(mean(Purchase)))
+train = left_join(train,city_pmean,by=c('City_Category'='City_Category'))
+test = left_join(test,city_pmean,by=c('City_Category'='City_Category'))
+rm(city_pmean)
+#mean purchase for each stay_year
+stay_pmean = train %>% group_by(Stay_In_Current_City_Years) %>% summarise(stay_pmean=round(mean(Purchase)))
+train = left_join(train,stay_pmean,by=c('Stay_In_Current_City_Years'='Stay_In_Current_City_Years'))
+test = left_join(test,stay_pmean,by=c('Stay_In_Current_City_Years'='Stay_In_Current_City_Years'))
+rm(stay_pmean)
 
 
 
@@ -68,107 +111,39 @@ test$cat23 = test$Product_Category_2 + test$Product_Category_3
 test$cat123 = test$Product_Category_1 + test$Product_Category_2 + test$Product_Category_3
 
 
+train$catm12 = train$Product_Category_1 * train$Product_Category_2
+train$catm13 = train$Product_Category_1 * train$Product_Category_3
+train$catm23 = train$Product_Category_2 * train$Product_Category_3
+train$catm123 = train$Product_Category_1 * train$Product_Category_2 * train$Product_Category_3
+
+test$catm12 = test$Product_Category_1 * test$Product_Category_2
+test$catm13 = test$Product_Category_1 * test$Product_Category_3
+test$catm23 = test$Product_Category_2 * test$Product_Category_3
+test$catm123 = test$Product_Category_1 * test$Product_Category_2 * test$Product_Category_3
 
 
-
-
-#cat pct
-# train$pct_c1 = train$Product_Category_1/(train$Product_Category_1+
-#                                                  train$Product_Category_2+
-#                                                  train$Product_Category_3)
-# train$pct_c2 = train$Product_Category_2/(train$Product_Category_1+
-#                                                  train$Product_Category_2+
-#                                                  train$Product_Category_3)
-# train$pct_c3 = train$Product_Category_3/(train$Product_Category_1+
-#                                                  train$Product_Category_2+
-#                                                  train$Product_Category_3)
-#
-#
-# test$pct_c1 = test$Product_Category_1/(test$Product_Category_1+
-#                                                test$Product_Category_2+
-#                                                test$Product_Category_3)
-# test$pct_c2 = test$Product_Category_2/(test$Product_Category_1+
-#                                                test$Product_Category_2+
-#                                                test$Product_Category_3)
-# test$pct_c3 = test$Product_Category_3/(test$Product_Category_1+
-#                                                test$Product_Category_2+
-#                                                test$Product_Category_3)
-
-
-
-
-#####squared feature
-sq_train = apply(train %>% select(-Purchase),2,function(x){
-        x^2
-})
-colnames(sq_train) = sapply(colnames(sq_train),function(x) paste('sq',x, sep = '_'))
-####
-sq_test = apply(test,2,function(x){
-        x^2
-})
-colnames(sq_test) = sapply(colnames(sq_test),function(x) paste('sq',x, sep = '_'))
-
-
-#####third feature
-th_train = apply(train %>% select(-Purchase),2,function(x){
-        x^3
-})
-colnames(th_train) = sapply(colnames(th_train),function(x) paste('th',x, sep = '_'))
-####
-th_test = apply(test,2,function(x){
-        x^3
-})
-colnames(th_test) = sapply(colnames(th_test),function(x) paste('th',x, sep = '_'))
-
-
-#####log feature
-lg_train = apply(train %>% select(-Purchase),2,function(x){
-        log(x+1)
-})
-colnames(lg_train) = sapply(colnames(lg_train),function(x) paste('lg',x, sep = '_'))
-####
-lg_test = apply(test,2,function(x){
-        log(x+1)
-})
-colnames(lg_test) = sapply(colnames(lg_test),function(x) paste('lg',x, sep = '_'))
-
-#####exponential feature
-exp_train = apply(train %>% select(-Purchase),2,function(x){
-        exp(x)
-})
-colnames(exp_train) = sapply(colnames(exp_train),function(x) paste('exp',x, sep = '_'))
-####
-exp_test = apply(test,2,function(x){
-        exp(x)
-})
-colnames(exp_test) = sapply(colnames(exp_test),function(x) paste('exp',x, sep = '_'))
-################
-################
-#### interaction vars:
-label=train$Purchase
-train2=as.data.frame(model.matrix( Purchase~ .^3,train))
-train=cbind(train2,label)
-rm(train2)
-test=as.data.frame(model.matrix( ~ .^3,test))
-##########################
-train = cbind(sq_train,train)
-test = cbind(sq_test,test)
-train = cbind(th_train,train)
-test = cbind(th_test,test)
-train = cbind(lg_train,train)
-test = cbind(lg_test,test)
-train = cbind(exp_train,train)
-test = cbind(exp_test,test)
-
-rm(exp_test,exp_train,lg_train,lg_test,sq_train,sq_test,
-   th_train,th_test,label)
-
-
-
-
+#############aggregate features:
 ######################
-label = train$label
-train = train %>% select(-label)
+label = train$Purchase
+# train = train %>% select(-label)
+train = train %>% select(-Purchase)
+######################
+all=rbind(train,test)
+#each user product:
+each_user_prd = all %>% group_by(User_ID) %>% summarise(each_user_prd = length(unique(Product_ID)))
+train = left_join(train,each_user_prd,by=c('User_ID' = 'User_ID'))
+test = left_join(test,each_user_prd,by=c('User_ID' = 'User_ID'))
+rm(each_user_prd)
+#each product n-user:
+each_prd_user = all %>% group_by(Product_ID) %>% summarise(each_prd_user = length(unique(User_ID)))
+train = left_join(train,each_prd_user,by=c('Product_ID' = 'Product_ID'))
+test = left_join(test,each_prd_user,by=c('Product_ID' = 'Product_ID'))
+rm(each_prd_user)
+
+
+
+
+xgb_dat= xgb.DMatrix(data=as.matrix(train),label = label)
 ######################
 
 ##########################
@@ -190,11 +165,16 @@ train = train %>% select(-label)
 ##########Eta=0.3
 #16:              cv:2851.406      lb:2851.98  (using top 40 features)
 ##############use prod_id and user_id
-#17:        cv: 2505      lb:2512  (using top 40 features)
-#17:        cv: 2506      lb:2507  (using top 45 features)
+#17:        cv: 2505      lb:2512       (using top 40 features)
+#18:        cv: 2506      lb:2507       (using top 45 features)
+############## add mean purchases features
+#19:        cv: 2447.22   lb:2495.68     (using top 45 features)
 
-
-
+##############no interaction and other features
+#20         cv: 2455    lb:2493     (using top 5 features)
+##############aggregate features
+#20         cv: 2440.9    lb:2477           (using top 9 features)
+#21         cv: 2438      lb:2472           (using top 24 features)
 
 
 ###
@@ -204,11 +184,11 @@ train = train %>% select(-label)
 # add interaction term to 4
 #############################################
 #################Feature Imp#################
-library(xgboost)
-xgb_dat= xgb.DMatrix(data=as.matrix(train),label = label)
 ############Select Features:
 param1 <- list(objective = "reg:linear",booster='gbtree',
-               eval_metric = "rmse",eta = 0.3)
+               eval_metric = "rmse",eta = 0.3,
+               colsample_bytree=0.8,
+               subsample=0.8)
 imp_md = xgboost(param=param1,data = xgb_dat,nrounds = 100)
 
 dat_name = colnames(train)
@@ -218,7 +198,7 @@ dat_name = colnames(train)
 imp = xgb.importance(feature_names=dat_name,model=imp_md )
 imp = as.data.frame(imp)
 saveRDS(imp,'imp.RDS')
-goodcols = as.character(imp$Feature)[1:45]
+goodcols = as.character(imp$Feature)
 
 tr = train[,colnames(train) %in% goodcols]
 tst = test[,colnames(test) %in% goodcols]
@@ -228,7 +208,7 @@ xgb_dat= xgb.DMatrix(data=as.matrix(tr),label = label)
 
 param1 <- list(objective = "reg:linear",booster='gbtree',
                eval_metric = "rmse",
-               eta = 0.3
+               eta = 0.4
                # colsample_bytree=0.8,
                # subsample=0.8
                )
@@ -236,13 +216,15 @@ set.seed(1028)
 bst.cv = xgb.cv(param=param1,data = xgb_dat, nfold = 10, nrounds = 3000,early.stop.round = 5)
 
 #211 or
-xgb_md = xgboost(param=param1,data = xgb_dat,nthread=4,nrounds = 559)
+xgb_md = xgboost(param=param1,data = xgb_dat,nthread=4,nrounds = 541)
 xgb_res1 = predict(xgb_md,as.matrix(tst))
 
-sub2 = cbind(subm1,xgb_res1)
+sub2 = data.frame(subm1, Purchase= as.numeric(xgb_res1))
+sub2 = as.data.frame(sub2)
 names(sub2)[3]='Purchase'
-write.csv(sub2,file = 'sub2.csv')
+sub2$Purchase = as.numeric(sub2$Purchase)
 
+write.csv(sub2,file = 'sub5.csv',row.names = F)
 
 
 
